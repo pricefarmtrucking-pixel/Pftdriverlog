@@ -1,145 +1,129 @@
+// db.js
 import Database from 'better-sqlite3';
-import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const DB_PATH = process.env.DB_PATH || './driverlog.sqlite';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
 
-// Ensure dir exists
-const dir = DB_PATH.includes('/') ? DB_PATH.split('/').slice(0, -1).join('/') : '.';
-if (dir && dir !== '.' && !fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+// Use persistent disk on Render if available
+const DB_PATH = process.env.DB_PATH || '/data/pft_driverlog.sqlite';
 
-const db = new Database(DB_PATH);
+// IMPORTANT: export the db instance
+export const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 
-// Schema (idempotent)
+// --- your schema / prepared statements ---
 db.exec(`
 CREATE TABLE IF NOT EXISTS drivers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
+  id INTEGER PRIMARY KEY,
+  name TEXT,
   rpm_default REAL,
   hourly_default REAL
 );
-
 CREATE TABLE IF NOT EXISTS trucks (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  unit TEXT NOT NULL UNIQUE
+  id INTEGER PRIMARY KEY,
+  unit TEXT UNIQUE
 );
-
 CREATE TABLE IF NOT EXISTS logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  log_date TEXT NOT NULL,
-  driver_id INTEGER NOT NULL,
-  truck_id INTEGER NOT NULL,
-  miles REAL DEFAULT 0,
-  value REAL DEFAULT 0,
-  rpm REAL DEFAULT 0.46,
-  per_value REAL DEFAULT 25,
-  detention_minutes INTEGER DEFAULT 0,
-  detention_rate REAL DEFAULT 0,
+  id INTEGER PRIMARY KEY,
+  log_date TEXT,
+  driver_id INTEGER,
+  truck_id INTEGER,
+  miles REAL,
+  value REAL,
+  rpm REAL,
+  per_value REAL,
+  detention_minutes INTEGER,
+  detention_rate REAL,
   notes TEXT,
   approved_at TEXT,
   approved_by TEXT,
   period_start TEXT,
-  period_end TEXT,
-  created_at TEXT DEFAULT (datetime('now')),
-  FOREIGN KEY(driver_id) REFERENCES drivers(id),
-  FOREIGN KEY(truck_id) REFERENCES trucks(id)
+  period_end TEXT
 );
-
-CREATE VIEW IF NOT EXISTS v_logs AS
-  SELECT l.*, d.name AS driver_name, t.unit AS truck_unit
-  FROM logs l
-  JOIN drivers d ON d.id = l.driver_id
-  JOIN trucks t ON t.id = l.truck_id;
 `);
 
-// Prepared statements
-export const insertDriver = db.prepare(`INSERT OR IGNORE INTO drivers(name, rpm_default, hourly_default) VALUES(?, NULL, NULL)`);
-export const insertTruck  = db.prepare(`INSERT OR IGNORE INTO trucks(unit)  VALUES(?)`);
-
-export const listDrivers = db.prepare(`SELECT * FROM drivers ORDER BY name`);
-export const listTrucks  = db.prepare(`SELECT * FROM trucks ORDER BY unit`);
-export const getDriver   = db.prepare(`SELECT * FROM drivers WHERE id=?`);
-
-export const setDriverDefaults = db.prepare(`
-  UPDATE drivers SET rpm_default=@rpm_default, hourly_default=@hourly_default WHERE id=@id
-`);
+export const insertDriver = db.prepare('INSERT INTO drivers (name) VALUES (?)');
+export const insertTruck  = db.prepare('INSERT OR IGNORE INTO trucks (unit) VALUES (?)');
+export const listDrivers  = db.prepare('SELECT * FROM drivers ORDER BY id');
+export const listTrucks   = db.prepare('SELECT * FROM trucks ORDER BY unit');
+export const getDriver    = db.prepare('SELECT * FROM drivers WHERE id = ?');
 
 export const addLog = db.prepare(`
-  INSERT INTO logs (
-    log_date, driver_id, truck_id, miles, value, rpm, per_value,
-    detention_minutes, detention_rate, notes, period_start, period_end
-  ) VALUES (
-    @log_date, @driver_id, @truck_id, @miles, @value, @rpm, @per_value,
-    @detention_minutes, @detention_rate, @notes, @period_start, @period_end
-  )
+INSERT INTO logs (log_date, driver_id, truck_id, miles, value, rpm, per_value,
+  detention_minutes, detention_rate, notes, approved_at, approved_by, period_start, period_end)
+VALUES (@log_date, @driver_id, @truck_id, @miles, @value, @rpm, @per_value,
+  @detention_minutes, @detention_rate, @notes, NULL, NULL, @period_start, @period_end)
 `);
-
-export const listLogs = db.prepare(`
-  SELECT * FROM v_logs
-  WHERE (@from IS NULL OR log_date >= @from)
-    AND (@to   IS NULL OR log_date <= @to)
-    AND (@driver_id IS NULL OR driver_id = @driver_id)
-    AND (@truck_id  IS NULL OR truck_id  = @truck_id)
-  ORDER BY log_date DESC, id DESC
-`);
-
-export const deleteLog = db.prepare(`DELETE FROM logs WHERE id = ?`);
 
 export const updateLog = db.prepare(`
-  UPDATE logs SET
-    log_date=@log_date, driver_id=@driver_id, truck_id=@truck_id,
-    miles=@miles, value=@value, rpm=@rpm, per_value=@per_value,
-    detention_minutes=@detention_minutes, detention_rate=@detention_rate,
-    notes=@notes
-  WHERE id=@id
+UPDATE logs SET
+  log_date=@log_date, driver_id=@driver_id, truck_id=@truck_id, miles=@miles, value=@value,
+  rpm=@rpm, per_value=@per_value, detention_minutes=@detention_minutes, detention_rate=@detention_rate, notes=@notes
+WHERE id=@id
 `);
 
-export const getPayrollTotals = db.prepare(`
-  SELECT
-    driver_id,
-    driver_name,
-    SUM(miles) AS total_miles,
-    SUM(value) AS total_value,
-    ROUND(SUM(miles * rpm + value * per_value + (detention_minutes/60.0)*detention_rate), 2) AS total_pay
-  FROM v_logs
-  WHERE (@from IS NULL OR log_date >= @from)
-    AND (@to   IS NULL OR log_date <= @to)
-    AND (@driver_id IS NULL OR driver_id = @driver_id)
-    AND (@truck_id  IS NULL OR truck_id  = @truck_id)
-  GROUP BY driver_id, driver_name
-  ORDER BY driver_name
+export const deleteLog = db.prepare('DELETE FROM logs WHERE id=?');
+
+export const listLogs = db.prepare(`
+SELECT l.*, d.name as driver_name, t.unit as truck_unit
+FROM logs l
+LEFT JOIN drivers d ON d.id = l.driver_id
+LEFT JOIN trucks t  ON t.id = l.truck_id
+WHERE ( @from IS NULL OR l.log_date >= @from )
+  AND ( @to   IS NULL OR l.log_date <= @to )
+  AND ( @driver_id IS NULL OR l.driver_id=@driver_id )
+  AND ( @truck_id  IS NULL OR l.truck_id=@truck_id )
+ORDER BY l.log_date DESC, l.id DESC
 `);
 
 export const listLogsUnapproved = db.prepare(`
-  SELECT * FROM v_logs
-  WHERE approved_at IS NULL
-  ORDER BY log_date DESC, id DESC
+SELECT l.*, d.name as driver_name, t.unit as truck_unit
+FROM logs l
+LEFT JOIN drivers d ON d.id = l.driver_id
+LEFT JOIN trucks t  ON t.id = l.truck_id
+WHERE l.approved_at IS NULL
+ORDER BY l.log_date ASC, l.id ASC
 `);
 
 export const approveLog = db.prepare(`
-  UPDATE logs SET approved_at=datetime('now'), approved_by=@by WHERE id=@id
+UPDATE logs SET approved_at = datetime('now'), approved_by = @by WHERE id = @id
+`);
+
+export const getPayrollTotals = db.prepare(`
+SELECT d.name as driver_name,
+  SUM(l.miles * l.rpm) + SUM(l.value * l.per_value) + SUM(l.detention_minutes/60.0 * l.detention_rate) AS gross
+FROM logs l
+LEFT JOIN drivers d ON d.id = l.driver_id
+WHERE ( @from IS NULL OR l.log_date >= @from )
+  AND ( @to   IS NULL OR l.log_date <= @to )
+  AND ( @driver_id IS NULL OR l.driver_id=@driver_id )
+  AND ( @truck_id  IS NULL OR l.truck_id=@truck_id )
+GROUP BY l.driver_id, d.name
+ORDER BY d.name
 `);
 
 export const listLogsByPeriod = db.prepare(`
-  SELECT * FROM v_logs
-  WHERE period_start=@start AND period_end=@end
-  ORDER BY log_date ASC, id ASC
+SELECT l.*, d.name as driver_name, t.unit as truck_unit
+FROM logs l
+LEFT JOIN drivers d ON d.id = l.driver_id
+LEFT JOIN trucks t  ON t.id = l.truck_id
+WHERE l.period_start = @start AND l.period_end = @end
+ORDER BY l.log_date ASC, l.id ASC
 `);
 
 export const closePeriodMarkApproved = db.prepare(`
-  UPDATE logs
-  SET approved_at=COALESCE(approved_at, datetime('now')),
-      approved_by=COALESCE(approved_by, @by)
-  WHERE period_start=@start AND period_end=@end
+UPDATE logs SET approved_at = COALESCE(approved_at, datetime('now')), approved_by = @by
+WHERE period_start = @start AND period_end = @end
 `);
 
-export const setLogPeriod = (ids, start, end) => {
-  if (!ids || !ids.length) return;
-  const placeholders = ids.map(()=>'?').join(',');
-  const stmt = db.prepare(
-    'UPDATE logs SET period_start=?, period_end=? WHERE id IN (' + placeholders + ')'
-  );
-  stmt.run(start, end, ...ids);
-};
+export function setLogPeriod(ids, start, end) {
+  const update = db.prepare(`UPDATE logs SET period_start=?, period_end=? WHERE id=?`);
+  const tx = db.transaction((rows) => {
+    rows.forEach((id) => update.run(start, end, id));
+  });
+  tx(ids);
+}
 
-export default db;
+export default db; // optional (kept for backward compatibility)
