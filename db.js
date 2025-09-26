@@ -1,73 +1,72 @@
+import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import Database from 'better-sqlite3';
 
-const DATA_DIR = process.env.DB_DIR || '/var/data';
-const DB_FILE  = path.join(DATA_DIR, 'driverlog.db');
+const dataDir = process.env.DATA_DIR || '/var/data';
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+const dbPath = path.join(dataDir, 'driverlogs.sqlite');
+const db = new Database(dbPath);
 
-let db;
-
-// init DB and schema
 export function initDb() {
-  // Ensure data dir exists (Render disk should be mounted to /var/data)
-  try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
-
-  db = new Database(DB_FILE);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS logs (
-      id                INTEGER PRIMARY KEY AUTOINCREMENT,
-      driver_token      TEXT NOT NULL,
-      log_date          TEXT NOT NULL,       -- YYYY-MM-DD
-      truck             TEXT,                -- raw unit text
-      miles             REAL DEFAULT 0,
-      value             REAL DEFAULT 0,
-      detention_minutes INTEGER DEFAULT 0,
-      notes             TEXT,
-      created_at        TEXT DEFAULT (datetime('now'))
-    );
-  `);
+  db.prepare(`CREATE TABLE IF NOT EXISTS logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    driver_token TEXT,
+    log_date TEXT,
+    truck TEXT,
+    miles REAL,
+    value REAL,
+    detention REAL DEFAULT 0,
+    start_time TEXT,
+    end_time TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    paid INTEGER DEFAULT 0
+  )`).run();
 }
 
-// insert a row
-export function insertLog(log) {
-  const stmt = db.prepare(`
-    INSERT INTO logs (driver_token, log_date, truck, miles, value, detention_minutes, notes)
-    VALUES (@driver_token, @log_date, @truck, @miles, @value, @detention_minutes, @notes)
-  `);
-  stmt.run({
-    driver_token: log.driver_token,
-    log_date: log.log_date,
-    truck: log.truck ?? null,
-    miles: Number(log.miles || 0),
-    value: Number(log.value || 0),
-    detention_minutes: Number(log.detention_minutes || 0),
-    notes: log.notes || ''
-  });
+export function insertLog({ driver_token, log_date, truck, miles, value, detention, start_time, end_time }) {
+  const stmt = db.prepare(
+    'INSERT INTO logs (driver_token, log_date, truck, miles, value, detention, start_time, end_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  stmt.run(driver_token, log_date, truck, miles, value, detention, start_time, end_time);
 }
 
-// list all logs (simple order newest first)
-export function getLogs() {
-  return db
-    .prepare(`SELECT id, driver_token, log_date, truck, miles, value, detention_minutes, notes, created_at
-              FROM logs ORDER BY created_at DESC`)
-    .all();
+export function getLogs(from, to) {
+  let sql = 'SELECT * FROM logs WHERE 1=1';
+  const params = [];
+  if (from) { sql += ' AND log_date >= ?'; params.push(from); }
+  if (to) { sql += ' AND log_date <= ?'; params.push(to); }
+  sql += ' ORDER BY log_date DESC';
+  return db.prepare(sql).all(...params);
 }
 
-// simple payroll aggregation by log_date & driver_token
-export function getPayroll() {
-  return db
-    .prepare(`
-      SELECT 
-        log_date,
-        driver_token,
-        SUM(miles)  AS total_miles,
-        SUM(value)  AS total_value,
-        SUM(COALESCE(detention_minutes,0)) AS total_detention_minutes,
-        COUNT(*)    AS entries
-      FROM logs
-      GROUP BY log_date, driver_token
-      ORDER BY log_date DESC, driver_token
-    `)
-    .all();
+export function getLogById(id) {
+  return db.prepare('SELECT * FROM logs WHERE id = ?').get(id);
+}
+
+export function updateLog(id, { log_date, truck, miles, value, detention, start_time, end_time }) {
+  db.prepare(`UPDATE logs SET
+    log_date=?, truck=?, miles=?, value=?, detention=?, start_time=?, end_time=?
+    WHERE id=?
+  `).run(log_date, truck, miles, value, detention, start_time, end_time, id);
+}
+
+export function markPaid(ids) {
+  const stmt = db.prepare('UPDATE logs SET paid=1 WHERE id=?');
+  ids.forEach(id => stmt.run(id));
+}
+
+export function getPayroll(from, to) {
+  let sql = `SELECT driver_token,
+    SUM(miles) as total_miles,
+    SUM(value) as total_value,
+    SUM(detention) as total_detention,
+    (SUM(miles) * 0.46 + SUM(value) * 25 + SUM(detention) * 25/60) as total_pay
+    FROM logs WHERE 1=1`;
+  const params = [];
+  if (from) { sql += ' AND log_date >= ?'; params.push(from); }
+  if (to) { sql += ' AND log_date <= ?'; params.push(to); }
+  sql += ' GROUP BY driver_token';
+  return db.prepare(sql).all(...params);
 }
