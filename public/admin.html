@@ -1,26 +1,164 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="utf-8">
-  <title>Admin - Driver Logs</title>
+<meta charset="utf-8">
+<title>Admin Logs</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font: 16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 20px; }
+  h1 { margin: 0 0 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+  input, button, select { font: inherit; padding: 8px 10px; }
+  button { cursor: pointer; }
+  table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+  th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+  th { background: #f6f7f9; font-weight: 700; }
+  tfoot td { font-weight: 700; }
+  .muted { color:#666; }
+  .right { text-align: right; }
+</style>
 </head>
 <body>
-  <h1>Admin Logs</h1>
-  <input type="text" id="token" placeholder="Enter admin token">
-  <button onclick="loadLogs()">Load Logs</button>
-  <button onclick="loadPayroll()">Load Payroll</button>
-  <pre id="output"></pre>
-  <script>
-    async function loadLogs() {
-      const token = document.getElementById('token').value;
-      const res = await fetch('/api/admin/logs?token=' + token);
-      document.getElementById('output').textContent = JSON.stringify(await res.json(), null, 2);
-    }
-    async function loadPayroll() {
-      const token = document.getElementById('token').value;
-      const res = await fetch('/api/admin/payroll?token=' + token);
-      document.getElementById('output').textContent = JSON.stringify(await res.json(), null, 2);
-    }
-  </script>
+<h1>Admin Logs</h1>
+
+<div class="row">
+  <input id="admTok" placeholder="Admin token" style="width:140px">
+  <input id="from" type="date">
+  <input id="to" type="date">
+  <button id="btnLogs">Load Logs</button>
+  <button id="btnPayroll">Load Payroll</button>
+  <button id="btnCsv">Export CSV</button>
+  <span class="muted" id="status"></span>
+</div>
+
+<div id="out"></div>
+
+<script>
+const $ = sel => document.querySelector(sel);
+const api = (p, token) => p + (p.includes('?')?'&':'?') + 'token=' + encodeURIComponent(token||'');
+
+let lastData = null; // for CSV
+
+function fmt(n, d=2){ if(n==null||isNaN(n)) return ''; return Number(n).toFixed(d).replace(/\.00$/,''); }
+
+function renderLogs(rows){
+  if(!rows.length){ $('#out').innerHTML = '<p class="muted">No logs.</p>'; return; }
+  let miles=0, value=0, det=0;
+  const trs = rows.map(r=>{
+    miles += Number(r.miles||0);
+    value += Number(r.value||0);
+    det   += Number(r.detention_minutes||0);
+    return `<tr>
+      <td>${r.id}</td>
+      <td>${r.log_date}</td>
+      <td>${r.driver_token}</td>
+      <td>${r.truck ?? ''}</td>
+      <td class="right">${fmt(r.miles,0)}</td>
+      <td class="right">${fmt(r.value,2)}</td>
+      <td class="right">${fmt(r.detention_minutes,0)}</td>
+      <td>${(r.notes||'').replace(/</g,'&lt;')}</td>
+      <td class="muted">${r.created_at}</td>
+    </tr>`;
+  }).join('');
+  $('#out').innerHTML = `
+    <table>
+      <thead><tr>
+        <th>ID</th><th>Date</th><th>Driver Token</th><th>Truck</th>
+        <th class="right">Miles</th><th class="right">Value (hrs)</th><th class="right">Detention (min)</th><th>Notes</th><th>Created</th>
+      </tr></thead>
+      <tbody>${trs}</tbody>
+      <tfoot><tr>
+        <td colspan="4" class="right">Totals</td>
+        <td class="right">${fmt(miles,0)}</td>
+        <td class="right">${fmt(value,2)}</td>
+        <td class="right">${fmt(det,0)}</td>
+        <td colspan="2"></td>
+      </tr></tfoot>
+    </table>`;
+}
+
+function renderPayroll(rows){
+  if(!rows.length){ $('#out').innerHTML = '<p class="muted">No payroll rows.</p>'; return; }
+  let miles=0, value=0, det=0, count=0;
+  const trs = rows.map(r=>{
+    miles += Number(r.total_miles||0);
+    value += Number(r.total_value||0);
+    det   += Number(r.total_detention_minutes||0);
+    count += Number(r.entries||0);
+    return `<tr>
+      <td>${r.log_date}</td>
+      <td>${r.driver_token}</td>
+      <td class="right">${fmt(r.total_miles,0)}</td>
+      <td class="right">${fmt(r.total_value,2)}</td>
+      <td class="right">${fmt(r.total_detention_minutes,0)}</td>
+      <td class="right">${fmt(r.entries,0)}</td>
+    </tr>`;
+  }).join('');
+  $('#out').innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Date</th><th>Driver Token</th>
+        <th class="right">Miles</th><th class="right">Value (hrs)</th><th class="right">Detention (min)</th><th class="right">Entries</th>
+      </tr></thead>
+      <tbody>${trs}</tbody>
+      <tfoot><tr>
+        <td colspan="2" class="right">Totals</td>
+        <td class="right">${fmt(miles,0)}</td>
+        <td class="right">${fmt(value,2)}</td>
+        <td class="right">${fmt(det,0)}</td>
+        <td class="right">${fmt(count,0)}</td>
+      </tr></tfoot>
+    </table>`;
+}
+
+function toCSV(objArr){
+  const rows = Array.isArray(objArr) ? objArr : [];
+  if(!rows.length) return '';
+  const headers = Object.keys(rows[0]);
+  const esc = s => {
+    s = String(s ?? '');
+    return /[",\n]/.test(s) ? `"${s.replaceAll('"','""')}"` : s;
+  };
+  const lines = [ headers.join(',') ];
+  for(const r of rows){
+    lines.push(headers.map(h=>esc(r[h])).join(','));
+  }
+  return lines.join('\n');
+}
+
+async function load(kind){
+  const token = $('#admTok').value.trim();
+  if(!token){ alert('Enter admin token'); return; }
+
+  const base = location.origin;
+  const url = kind==='payroll' ? '/api/admin/payroll' : '/api/admin/logs';
+  const qs = new URLSearchParams();
+  qs.set('token', token);
+
+  if($('#from').value) qs.set('from', $('#from').value);
+  if($('#to').value)   qs.set('to',   $('#to').value);
+
+  $('#status').textContent = 'Loading…';
+  const r = await fetch(`${url}?${qs.toString()}`);
+  const data = await r.json();
+  lastData = data;
+  if(kind==='payroll') renderPayroll(data);
+  else renderLogs(data);
+  $('#status').textContent = `Loaded ${Array.isArray(data)?data.length:0} rows`;
+}
+
+$('#btnLogs').addEventListener('click', ()=>load('logs'));
+$('#btnPayroll').addEventListener('click', ()=>load('payroll'));
+$('#btnCsv').addEventListener('click', ()=>{
+  if(!lastData || !lastData.length){ alert('Nothing loaded'); return; }
+  const csv = toCSV(lastData);
+  const blob = new Blob([csv], { type:'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'admin_export.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 500);
+});
+</script>
 </body>
 </html>
