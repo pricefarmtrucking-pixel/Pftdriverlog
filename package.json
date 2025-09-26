@@ -2,7 +2,10 @@
   "name": "driver-daily-log",
   "version": "1.0.0",
   "type": "module",
-  "scripts": { "start": "node index.js" },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
   "dependencies": {
     "better-sqlite3": "^9.6.0",
     "cors": "^2.8.5",
