@@ -13,7 +13,7 @@ const DB_PATH = process.env.DB_PATH || '/data/pft_driverlog.sqlite';
 export const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 
-// --- your schema / prepared statements ---
+// --- schema ---
 db.exec(`
 CREATE TABLE IF NOT EXISTS drivers (
   id INTEGER PRIMARY KEY,
@@ -126,4 +126,4 @@ export function setLogPeriod(ids, start, end) {
   tx(ids);
 }
 
-export default db; // optional (kept for backward compatibility)
+export default db; // optional (compatibility)
