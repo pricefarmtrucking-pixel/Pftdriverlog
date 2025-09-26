@@ -1,0 +1,103 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Edit Driver Log</title>
+<style>
+  body{font:14px/1.4 system-ui,Segoe UI,Roboto,Arial;margin:0;background:#0b1016;color:#e7eef7}
+  .wrap{max-width:900px;margin:0 auto;padding:16px}
+  .card{background:#131b24;border:1px solid #1e2a36;border-radius:12px;padding:16px;margin:16px 0}
+  label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#8291a3;margin:10px 0 6px}
+  input,textarea,button{width:100%;padding:10px;border-radius:8px;border:1px solid #263240;background:#0f1620;color:#e7eef7}
+  .row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  button.primary{background:#4cc38a;border:0;color:#0b1410;font-weight:700;cursor:pointer;margin-top:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Edit Driver Log</h1>
+  <div class="card">
+    <div class="row">
+      <div><label>Date</label><input id="log_date" type="date"></div>
+      <div><label>Driver Name</label><input id="driver_name" type="text"></div>
+      <div><label>Driver Email</label><input id="driver_email" type="email"></div>
+    </div>
+    <div class="row">
+      <div><label>Truck #</label><input id="truck_unit" type="text"></div>
+      <div><label>Miles</label><input id="miles" type="number" step="0.01"></div>
+      <div><label>Stop Value</label><input id="stop_value" type="number" step="0.01"></div>
+    </div>
+    <div class="row">
+      <div><label>Detention Minutes</label><input id="detention_minutes" type="number" step="1"></div>
+      <div><label>Detention Rate</label><input id="detention_rate" type="number" step="0.01"></div>
+      <div><label>Total Minutes</label><input id="total_minutes" type="number" step="1"></div>
+    </div>
+    <div class="row">
+      <div><label>Start Time</label><input id="start_time" type="text" placeholder="HH:MM"></div>
+      <div><label>End Time</label><input id="end_time" type="text" placeholder="HH:MM"></div>
+      <div><label>Paid</label><input id="paid" type="checkbox"></div>
+    </div>
+    <label>Notes</label>
+    <textarea id="notes" rows="4"></textarea>
+    <button class="primary" id="save">Save</button>
+    <span id="status" style="margin-left:12px;color:#8291a3"></span>
+  </div>
+</div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const id = Number(params.get('id'));
+const token = params.get('token') || '';
+
+const $ = s => document.querySelector(s);
+
+async function load(){
+  const res = await fetch(`/api/admin/logs/${id}?token=${encodeURIComponent(token)}`);
+  if(!res.ok){ $('#status').textContent = 'Load failed'; return; }
+  const r = await res.json();
+  $('#log_date').value = r.log_date || '';
+  $('#driver_name').value = r.driver_name || '';
+  $('#driver_email').value = r.driver_email || '';
+  $('#truck_unit').value = r.truck_unit || '';
+  $('#miles').value = r.miles || 0;
+  $('#stop_value').value = r.stop_value || 0;
+  $('#detention_minutes').value = r.detention_minutes || 0;
+  $('#detention_rate').value = r.detention_rate || 0;
+  $('#total_minutes').value = r.total_minutes || 0;
+  $('#start_time').value = r.start_time || '';
+  $('#end_time').value = r.end_time || '';
+  $('#paid').checked = !!r.paid;
+  $('#notes').value = r.notes || '';
+}
+
+async function save(){
+  const body = {
+    log_date: $('#log_date').value || null,
+    driver_name: $('#driver_name').value || null,
+    driver_email: $('#driver_email').value || null,
+    truck_unit: $('#truck_unit').value || null,
+    miles: Number($('#miles').value || 0),
+    stop_value: Number($('#stop_value').value || 0),
+    detention_minutes: Number($('#detention_minutes').value || 0),
+    detention_rate: Number($('#detention_rate').value || 0),
+    total_minutes: Number($('#total_minutes').value || 0),
+    start_time: $('#start_time').value || null,
+    end_time: $('#end_time').value || null,
+    paid: $('#paid').checked ? 1 : 0,
+    notes: $('#notes').value || null
+  };
+  const res = await fetch(`/api/admin/logs/${id}?token=${encodeURIComponent(token)}`, {
+    method:'PUT',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  $('#status').textContent = res.ok ? 'Saved ✓' : 'Save failed';
+}
+
+document.getElementById('save').addEventListener('click', save);
+load();
+</script>
+</body>
+</html>

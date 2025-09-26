@@ -1,10 +1,9 @@
+
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import cors from 'cors';
-
-// NOTE: db.js must export getOrCreateTruckId for truck unit -> truck_id
 import {
   initDb,
   insertLog,
@@ -12,8 +11,7 @@ import {
   getLogById,
   updateLog,
   markPaid,
-  getPayroll,
-  getOrCreateTruckId
+  getPayroll
 } from './db.js';
 
 dotenv.config();
@@ -24,172 +22,114 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* -------------------------------------------------
-   CORS + Body parsing
--------------------------------------------------- */
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-/* -------------------------------------------------
-   Static (admin page, etc)
--------------------------------------------------- */
+// Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
 
-/* -------------------------------------------------
-   Helpers
--------------------------------------------------- */
-function driverIdFromToken(token) {
-  if (!token) return null;
-  try {
-    // Expect env like: {"1":"41571","2":"82785"}
-    const map = JSON.parse(process.env.DRIVER_TOKENS_JSON || '{}');
-    for (const [driverId, t] of Object.entries(map)) {
-      if (String(token).trim() === String(t).trim()) return Number(driverId);
-    }
-  } catch (e) {
-    console.error('[driverIdFromToken] bad DRIVER_TOKENS_JSON:', e?.message);
-  }
-  return null;
-}
+// Health check
+app.get('/api/ping', (req, res) => {
+  res.json({ ok: true, time: new Date().toISOString() });
+});
 
-function requireAdmin(req, res) {
-  if (req.query.token !== process.env.ADMIN_TOKEN) {
+/** Auth helper for admin routes */
+function assertAdmin(req, res) {
+  if (req.query.token !== process.env.ADMIN_TOKEN && req.headers['x-auth'] !== process.env.ADMIN_TOKEN) {
     res.status(403).json({ error: 'Unauthorized' });
     return false;
   }
   return true;
 }
 
-/* -------------------------------------------------
-   Health
--------------------------------------------------- */
-app.get('/api/ping', (req, res) => {
-  res.json({ ok: true, time: new Date().toISOString() });
-});
-
-/* -------------------------------------------------
-   Driver submission (public)
-   Expects body:
-   {
-     driver_token, log_date (YYYY-MM-DD), truck_unit (string/number),
-     miles, value, detention_minutes, notes
-   }
--------------------------------------------------- */
+// Submit log (driver facing)
 app.post('/api/public/submit', async (req, res) => {
   try {
-    const {
-      driver_token,
-      log_date,
-      truck_unit,
-      miles,
-      value,
-      detention_minutes,
-      notes
-    } = req.body || {};
-
-    // Validate required fields
-    if (!log_date) throw new Error('log_date is required (YYYY-MM-DD)');
-    if (!truck_unit) throw new Error('truck_unit is required');
-
-    // Resolve driver by token (from env DRIVER_TOKENS_JSON)
-    const driver_id = driverIdFromToken(driver_token || req.headers['x-auth']);
-    if (!driver_id) {
-      throw new Error('invalid driver token (no match in DRIVER_TOKENS_JSON)');
-    }
-
-    // Resolve or create truck_id
-    const truck_id = await getOrCreateTruckId(String(truck_unit).trim());
-    if (!truck_id) throw new Error('could not resolve truck_id from truck_unit');
-
-    // Coerce numerics
-    const milesNum = Number(miles || 0);
-    const valueNum = Number(value || 0);
-    const detMin   = Number(detention_minutes || 0);
-
-    // Insert via db.js; db.js should default rpm/per_value/detention_rate if needed
-    await insertLog({
-      log_date,
-      driver_id,
-      truck_id,
-      miles: milesNum,
-      value: valueNum,
-      detention_minutes: detMin,
-      notes: notes || ''
-    });
-
-    return res.json({ ok: true });
+    const log = req.body || {};
+    // sanitize minimal
+    const data = {
+      log_date: log.log_date || null,
+      driver_name: log.driver_name || null,
+      driver_email: log.driver_email || null,
+      truck_unit: log.truck_unit || null,
+      miles: Number(log.miles || 0),
+      stop_value: Number(log.value || 0),
+      detention_minutes: Number(log.detention_minutes || 0),
+      detention_rate: Number(log.detention_rate || 0),
+      start_time: log.start_time || null,
+      end_time: log.end_time || null,
+      total_minutes: Number(log.total_minutes || 0),
+      notes: log.notes || null
+    };
+    const id = insertLog(data);
+    res.json({ ok: true, id });
   } catch (err) {
-    console.error('[POST /api/public/submit] error:', err);
-    // Return specific reason to help debug from the browser
-    return res.status(400).json({ error: err?.message || String(err) });
+    console.error('[submit] error:', err);
+    res.status(500).json({ error: 'Failed to submit log' });
   }
 });
 
-/* -------------------------------------------------
-   Admin: list logs (optional from/to filters)
--------------------------------------------------- */
+// ---- Admin: list logs with filters ----
 app.get('/api/admin/logs', (req, res) => {
-  if (!requireAdmin(req, res)) return;
+  if (!assertAdmin(req, res)) return;
   const { from, to } = req.query;
-  const logs = getLogs(from, to);
-  res.json(logs);
+  const rows = getLogs(from || null, to || null);
+  res.json(rows);
 });
 
-/* -------------------------------------------------
-   Admin: get one log by id
--------------------------------------------------- */
+// ---- Admin: get log by id ----
 app.get('/api/admin/logs/:id', (req, res) => {
-  if (!requireAdmin(req, res)) return;
-  const log = getLogById(req.params.id);
-  if (!log) return res.status(404).json({ error: 'Not found' });
-  res.json(log);
+  if (!assertAdmin(req, res)) return;
+  const row = getLogById(Number(req.params.id));
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  res.json(row);
 });
 
-/* -------------------------------------------------
-   Admin: update a log
--------------------------------------------------- */
-app.put('/api/admin/logs/:id', (req, res) => {
-  if (!requireAdmin(req, res)) return;
+// ---- Admin: update log ----
+app.put('/api/admin/logs/:id', async (req, res) => {
+  if (!assertAdmin(req, res)) return;
   try {
-    updateLog(req.params.id, req.body);
+    const fields = req.body || {};
+    updateLog(Number(req.params.id), fields);
+
+    // Optional: notify via webhook (edited copy)
+    const hook = process.env.MAIL_WEBHOOK_URL;
+    if (hook) {
+      try {
+        const row = getLogById(Number(req.params.id));
+        await fetch(hook, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'driver_log_edited', log: row })
+        }).catch(()=>{});
+      } catch {}
+    }
+
     res.json({ ok: true });
   } catch (e) {
-    console.error('[PUT /api/admin/logs/:id] error:', e);
+    console.error('[update] error:', e);
     res.status(500).json({ error: 'Update failed' });
   }
 });
 
-/* -------------------------------------------------
-   Admin: mark multiple logs paid
-   Body: { ids: [1,2,3] }
--------------------------------------------------- */
+// ---- Admin: mark selected as paid ----
 app.post('/api/admin/mark-paid', (req, res) => {
-  if (!requireAdmin(req, res)) return;
+  if (!assertAdmin(req, res)) return;
   const { ids } = req.body;
   if (!ids || !Array.isArray(ids)) return res.status(400).json({ error: 'ids required' });
-  try {
-    markPaid(ids);
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('[POST /api/admin/mark-paid] error:', e);
-    res.status(500).json({ error: 'Mark paid failed' });
-  }
+  markPaid(ids.map(n=>Number(n)));
+  res.json({ ok: true });
 });
 
-/* -------------------------------------------------
-   Admin: payroll summary (optional from/to filters)
--------------------------------------------------- */
+// ---- Admin: payroll summary ----
 app.get('/api/admin/payroll', (req, res) => {
-  if (!requireAdmin(req, res)) return;
+  if (!assertAdmin(req, res)) return;
   const { from, to } = req.query;
-  const payroll = getPayroll(from, to);
-  res.json(payroll);
+  const rows = getPayroll(from || null, to || null);
+  res.json(rows);
 });
 
-/* -------------------------------------------------
-   Boot
--------------------------------------------------- */
 app.listen(PORT, () => {
   console.log(`Driver Daily Log API running on :${PORT}`);
   initDb();
