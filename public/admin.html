@@ -1,73 +1,119 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Driver Logs — Admin</title>
-  <style>
-    body{font:15px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin:0; background:#0b1016; color:#e7eef7}
-    header{padding:14px 18px; background:#131b24; border-bottom:1px solid #1e2a36; position:sticky; top:0}
-    h1{margin:0; font-size:18px}
-    .wrap{max-width:1100px; margin:0 auto; padding:18px}
-    .card{background:#131b24; border:1px solid #1e2a36; border-radius:12px; padding:14px; margin-bottom:16px}
-    table{width:100%; border-collapse:collapse}
-    th,td{border-top:1px solid #233142; padding:8px; text-align:left}
-    th{font-size:12px; text-transform:uppercase; color:#a9b8c8; letter-spacing:.05em}
-    input,select,button{padding:8px; border-radius:8px; border:1px solid #2a394a; background:#0f1620; color:#e7eef7}
-    .btn{background:#4cc38a; color:#0b1016; font-weight:700; border:0; padding:8px 12px; border-radius:10px; cursor:pointer}
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Driver Log Admin</title>
+<style>
+  body{font:14px/1.4 system-ui,Segoe UI,Roboto,Helvetica,Arial;margin:0;padding:20px;background:#0b1016;color:#e7eef7}
+  h1{margin:0 0 12px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  input,select,button{padding:8px;border-radius:8px;border:1px solid #2a394a;background:#0f1620;color:#e7eef7}
+  table{width:100%;border-collapse:collapse;margin-top:10px}
+  th,td{border-top:1px solid #233142;padding:6px;text-align:left}
+  th{font-size:12px;color:#b9c7d6;text-transform:uppercase;letter-spacing:.05em}
+  .right{text-align:right}
+  .ok{color:#4cc38a}
+  .warn{color:#ffb454}
+  .err{color:#ff6b6b}
+</style>
 </head>
 <body>
-<header><h1>Driver Logs — Admin</h1></header>
-<div class="wrap">
-  <div class="card">
-    <label>Admin Token</label>
-    <input id="adminTok" placeholder="Enter admin token">
-    <button class="btn" id="btnCheck">Check</button>
-    <pre id="out" style="white-space:pre-wrap"></pre>
-  </div>
+<h1>Driver Log Admin</h1>
 
-  <div class="card">
-    <h3>Pending Approvals</h3>
-    <button class="btn" id="btnLoadPending">Load Pending</button>
-    <table id="tbl"><thead><tr>
-      <th>ID</th><th>Date</th><th>Driver</th><th>Truck</th><th>Miles</th><th>Value</th><th>Det (min)</th><th>Approve</th>
-    </tr></thead><tbody></tbody></table>
-  </div>
+<div class="row">
+  <button id="ping">Ping</button>
+  <button id="loadDrivers">Drivers</button>
+  <button id="loadTrucks">Trucks</button>
+  <button id="loadPending">Pending Approvals</button>
 </div>
 
+<div class="row">
+  <label>From <input type="date" id="from"></label>
+  <label>To <input type="date" id="to"></label>
+  <label>Driver ID <input type="number" id="driver_id" min="1"></label>
+  <label>Truck ID <input type="number" id="truck_id" min="1"></label>
+  <button id="loadLogs">Filter Logs</button>
+  <button id="downloadCsv">Download CSV</button>
+</div>
+
+<div class="row">
+  <button id="periodCurrent">Show Current Period</button>
+  <button id="periodAssign">Assign Current Period to Selected IDs</button>
+  <button id="periodClose">Close Period (mark approved + export)</button>
+</div>
+
+<pre id="out"></pre>
+
 <script>
-const api = location.origin;
+const API = location.origin; // same origin (Render)
+const ADMIN_TOKEN = (new URLSearchParams(location.search).get('t')) || (localStorage.getItem('adminTok')||prompt('Admin token?'));
+if (ADMIN_TOKEN) localStorage.setItem('adminTok', ADMIN_TOKEN);
 
-function h(e){return document.getElementById(e)}
-function rowHTML(r){
-  return `<tr>
-    <td>${r.id}</td><td>${r.log_date}</td><td>${r.driver_name}</td><td>${r.truck_unit}</td>
-    <td>${r.miles}</td><td>${r.value}</td><td>${r.detention_minutes}</td>
-    <td><button data-id="${r.id}" class="ap">Approve</button></td>
-  </tr>`;
+function headers(){
+  return {'Content-Type':'application/json','X-Auth':ADMIN_TOKEN||''};
 }
+function print(obj){ document.getElementById('out').textContent = typeof obj==='string'?obj:JSON.stringify(obj,null,2); }
 
-h('btnCheck').onclick = async ()=>{
-  const tok=h('adminTok').value.trim();
-  const r=await fetch(`${api}/api/admin/tokens`, { headers:{'X-Auth':tok}});
-  h('out').textContent = await r.text();
+document.getElementById('ping').onclick = async()=>{
+  const r = await fetch(API+'/api/ping'); print(await r.json());
 };
-
-h('btnLoadPending').onclick = async ()=>{
-  const tok=h('adminTok').value.trim();
-  const r=await fetch(`${api}/api/approvals/pending`, { headers:{'X-Auth':tok}});
-  const rows=await r.json();
-  const tb=h('tbl').querySelector('tbody'); tb.innerHTML='';
-  rows.forEach(x=> tb.insertAdjacentHTML('beforeend', rowHTML(x)) );
+document.getElementById('loadDrivers').onclick = async()=>{
+  const r = await fetch(API+'/api/drivers'); print(await r.json());
 };
-
-document.addEventListener('click', async (e)=>{
-  const b = e.target.closest('.ap'); if(!b) return;
-  const id=b.dataset.id; const tok=h('adminTok').value.trim();
-  const r=await fetch(`${api}/api/approvals/${id}/approve`, { method:'POST', headers:{'X-Auth':tok}});
-  if (r.ok) { b.closest('tr').remove(); } else { alert('Approve failed'); }
-});
+document.getElementById('loadTrucks').onclick = async()=>{
+  const r = await fetch(API+'/api/trucks'); print(await r.json());
+};
+document.getElementById('loadPending').onclick = async()=>{
+  const r = await fetch(API+'/api/approvals/pending', { headers: headers() });
+  print(await r.json());
+};
+document.getElementById('loadLogs').onclick = async()=>{
+  const p = new URLSearchParams();
+  const from = document.getElementById('from').value;
+  const to = document.getElementById('to').value;
+  const driver_id = document.getElementById('driver_id').value;
+  const truck_id = document.getElementById('truck_id').value;
+  if (from) p.set('from', from);
+  if (to) p.set('to', to);
+  if (driver_id) p.set('driver_id', driver_id);
+  if (truck_id) p.set('truck_id', truck_id);
+  const r = await fetch(API+'/api/logs?'+p.toString(), { headers: headers() });
+  print(await r.json());
+};
+document.getElementById('downloadCsv').onclick = async()=>{
+  const p = new URLSearchParams();
+  const from = document.getElementById('from').value;
+  const to = document.getElementById('to').value;
+  const driver_id = document.getElementById('driver_id').value;
+  const truck_id = document.getElementById('truck_id').value;
+  if (from) p.set('from', from);
+  if (to) p.set('to', to);
+  if (driver_id) p.set('driver_id', driver_id);
+  if (truck_id) p.set('truck_id', truck_id);
+  window.location = API+'/api/logs.csv?'+p.toString();
+};
+document.getElementById('periodCurrent').onclick = async()=>{
+  const r = await fetch(API+'/api/period/current'); print(await r.json());
+};
+document.getElementById('periodAssign').onclick = async()=>{
+  const ids = prompt('Enter comma-separated log IDs to assign to current period (e.g. 12,13,14):');
+  if (!ids) return;
+  const list = ids.split(',').map(s=>Number(s.trim())).filter(Boolean);
+  const r = await fetch(API+'/api/period/assign', {
+    method:'POST', headers: headers(), body: JSON.stringify({ ids: list })
+  });
+  print(await r.json());
+};
+document.getElementById('periodClose').onclick = async()=>{
+  const start = prompt('Period START (YYYY-MM-DD):');
+  const end = prompt('Period END (YYYY-MM-DD):');
+  if (!start || !end) return;
+  const r = await fetch(API+'/api/period/close', {
+    method:'POST', headers: headers(), body: JSON.stringify({ start, end })
+  });
+  print(await r.json());
+};
 </script>
 </body>
 </html>
