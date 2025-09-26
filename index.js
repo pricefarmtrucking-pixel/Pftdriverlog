@@ -17,41 +17,51 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 /* =========================
-   CORS (must be before routes)
+   CORS (strict + explicit)
    ========================= */
-const ALLOWED_ORIGINS = [
+const ALLOWED_ORIGINS = new Set([
   'https://pricefarmtrucking-pixel.github.io',
   'https://pricefarmtrucking.github.io'
-];
+]);
 
+// You can keep the cors() middleware (nice defaults) …
 app.use(cors({
   origin(origin, cb) {
-    // allow same-origin or non-browser clients (curl/postman)
-    if (!origin) return cb(null, true);
-    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-    return cb(null, false);
+    if (!origin) return cb(null, true);                         // curl/postman
+    if (ALLOWED_ORIGINS.has(origin)) return cb(null, true);     // allow GH pages
+    return cb(null, false);                                     // block others
   },
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET','POST','OPTIONS'],
   allowedHeaders: ['Content-Type'],
   credentials: false,
   maxAge: 86400
 }));
 
-// Ensure preflight OPTIONS returns immediately with CORS headers
-app.options('*', cors());
+// …and also force headers explicitly (some proxies strip them)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin || ALLOWED_ORIGINS.has(origin)) {
+    if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    // no credentials, so we don't send ACA-Credentials
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 
-/* Body parsers & static (after CORS) */
+/* Body parsers & static */
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ---- Simple auth via header token ----
+/* ---------- Auth helper ---------- */
 function roleFrom(req) {
   const token = req.headers['x-auth'] || req.query.token;
   if (!token) return { role: 'guest' };
   if (process.env.ADMIN_TOKEN && token === process.env.ADMIN_TOKEN) return { role: 'admin' };
 
-  // Driver tokens map
   let map = {};
   try { map = JSON.parse(process.env.DRIVER_TOKENS_JSON || '{}'); } catch {}
   for (const [driverId, t] of Object.entries(map)) {
@@ -60,29 +70,40 @@ function roleFrom(req) {
   return { role: 'guest' };
 }
 
-// ---- Pay period helpers ----
+/* ---------- Pay period helper ---------- */
 const WEEK_STARTS = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
 function currentPayPeriod(now = new Date()) {
   const startCode = (process.env.PAY_WEEK_START || 'MON').toUpperCase();
-  const startIdx = WEEK_STARTS.indexOf(startCode); // 0..6
+  const startIdx = WEEK_STARTS.indexOf(startCode);
   const hhmm = String(process.env.PAY_CUTOFF_HHMM || '1700').padStart(4,'0');
   const cutoffH = Number(hhmm.slice(0,2)), cutoffM = Number(hhmm.slice(2,4));
 
   const d = new Date(now);
   const day = d.getDay(); // 0=SUN
-  let diff = (day - startIdx + 7) % 7;
-  const start = new Date(d); start.setHours(0,0,0,0); start.setDate(d.getDate()-diff);
+  const start = new Date(d); start.setHours(0,0,0,0);
+  const diff = (day - startIdx + 7) % 7;
+  start.setDate(d.getDate() - diff);
 
-  // If now is before the cutoff on the start day, roll back one week
   const cutoff = new Date(start); cutoff.setHours(cutoffH, cutoffM, 0, 0);
-  if (now < cutoff) start.setDate(start.getDate()-7);
+  if (now < cutoff) start.setDate(start.getDate() - 7);
 
   const end = new Date(start); end.setDate(start.getDate()+6);
-  const toISO = (x)=> x.toISOString().slice(0,10);
+  const toISO = x => x.toISOString().slice(0,10);
   return { start: toISO(start), end: toISO(end) };
 }
 
-// ---- Seed endpoints ----
+/* ---------- Debug endpoint (helps confirm Origin seen by server) ---------- */
+app.get('/api/debug/origin', (req,res) => {
+  const origin = req.headers.origin || null;
+  res.json({
+    ok: true,
+    origin,
+    allowed: origin ? ALLOWED_ORIGINS.has(origin) : true,
+    time: new Date().toISOString()
+  });
+});
+
+/* ---------- Seed endpoints ---------- */
 app.post('/api/seed/driver', (req, res) => {
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: 'name required' });
@@ -97,7 +118,7 @@ app.post('/api/seed/truck', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- Admin: set per-driver defaults ----
+/* ---------- Admin: per-driver defaults ---------- */
 app.post('/api/driver/:id/defaults', (req,res)=>{
   const user = roleFrom(req);
   if (user.role!=='admin') return res.status(403).json({ error:'admin only' });
@@ -105,14 +126,12 @@ app.post('/api/driver/:id/defaults', (req,res)=>{
   res.json({ ok:true });
 });
 
-// ---- Lists ----
+/* ---------- Lists ---------- */
 app.get('/api/drivers', (req, res) => res.json(listDrivers.all()));
 app.get('/api/trucks',  (req, res) => res.json(listTrucks.all()));
 
-// ---- Create log: server-side default rates (driver-specific) ----
+/* ---------- Create log (server-side defaults) ---------- */
 app.post('/api/logs', (req, res) => {
-  const user = roleFrom(req);
-
   let rpm = req.body.rpm;
   let per_value = req.body.per_value;
   let det_rate = req.body.detention_rate;
@@ -129,7 +148,6 @@ app.post('/api/logs', (req, res) => {
   }
   if (per_value == null) per_value = 25;
 
-  // Optionally, auto-assign current period when created
   const { start, end } = currentPayPeriod();
 
   const data = {
@@ -150,7 +168,7 @@ app.post('/api/logs', (req, res) => {
   res.json({ ok: true, id: info.lastInsertRowid });
 });
 
-// ---- Update/Delete ----
+/* ---------- Update/Delete ---------- */
 app.put('/api/logs/:id', (req, res) => {
   const user = roleFrom(req);
   if (user.role === 'guest') return res.status(401).json({ error: 'auth required' });
@@ -179,7 +197,7 @@ app.delete('/api/logs/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- Fetch logs w/ privacy for drivers ----
+/* ---------- Fetch logs (driver privacy) ---------- */
 app.get('/api/logs', (req, res) => {
   const user = roleFrom(req);
   const params = {
@@ -191,16 +209,12 @@ app.get('/api/logs', (req, res) => {
   let rows = listLogs.all(params);
 
   if (user.role === 'driver') {
-    rows = rows
-      .filter(r => r.driver_id === user.driverId) // only own rows
-      .map(r => ({
-        ...r
-      }));
+    rows = rows.filter(r => r.driver_id === user.driverId);
   }
   res.json(rows);
 });
 
-// ---- Payroll aggregation ----
+/* ---------- Payroll aggregation ---------- */
 app.get('/api/payroll', (req, res) => {
   const user = roleFrom(req);
   const params = {
@@ -213,7 +227,7 @@ app.get('/api/payroll', (req, res) => {
   res.json(rows);
 });
 
-// ---- CSV export (filtered) ----
+/* ---------- CSV export ---------- */
 app.get('/api/logs.csv', (req, res) => {
   const user = roleFrom(req);
   const params = {
@@ -238,7 +252,7 @@ app.get('/api/logs.csv', (req, res) => {
   res.send(csv);
 });
 
-// ---- Approvals ----
+/* ---------- Approvals ---------- */
 app.get('/api/approvals/pending', (req, res) => {
   const user = roleFrom(req);
   if (user.role !== 'admin') return res.status(403).json({ error: 'admin only' });
@@ -252,7 +266,7 @@ app.post('/api/approvals/:id/approve', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- Period assignment & closing ----
+/* ---------- Periods ---------- */
 app.get('/api/period/current', (req, res) => {
   res.json(currentPayPeriod());
 });
@@ -286,11 +300,9 @@ app.post('/api/period/close', async (req, res) => {
     }).join(','))
   ].join('\n');
 
-  // Save to Render disk
   const fname = `/data/payroll_${start}_to_${end}.csv`;
   fs.writeFileSync(fname, csv, 'utf8');
 
-  // Optional Drive upload
   let driveFileId = null;
   const haveDrive = !!(process.env.GOOGLE_SERVICE_EMAIL && process.env.GOOGLE_SERVICE_PRIVATE_KEY && process.env.GOOGLE_DRIVE_FOLDER_ID);
   if (haveDrive) {
@@ -319,9 +331,7 @@ app.post('/api/period/close', async (req, res) => {
   res.json({ ok:true, start, end, saved: fname, driveFileId });
 });
 
-
-// ---- Public submission endpoint (for GitHub Pages form) ----
-// Accepts: { driver_token, log_date, truck_unit, miles, value, detention_minutes, notes, dup_action? }
+/* ---------- Public submit (GitHub Pages posts here) ---------- */
 function driverIdFromToken(tok){
   let map = {};
   try { map = JSON.parse(process.env.DRIVER_TOKENS_JSON || '{}'); } catch {}
@@ -331,7 +341,6 @@ function driverIdFromToken(tok){
   return null;
 }
 
-// find-or-create truck by unit
 import db from './db.js';
 function getOrCreateTruckId(unit){
   if (!unit || !unit.trim()) return null;
@@ -342,8 +351,14 @@ function getOrCreateTruckId(unit){
   return row2 ? row2.id : null;
 }
 
+// LOG every hit so we can see preflight vs post
+app.use('/api/public/submit', (req,res,next)=>{
+  console.log(`[submit] ${req.method} from ${req.headers.origin || 'no-origin'} -> ${req.path}`);
+  next();
+});
+
 app.post('/api/public/submit', (req, res) => {
-  const token = req.body.driver_token || req.headers['x-auth']; // allow header or body
+  const token = req.body.driver_token || req.headers['x-auth'];
   const driverId = driverIdFromToken(token);
   if (!driverId) return res.status(401).json({ error: 'invalid driver token' });
 
@@ -354,7 +369,6 @@ app.post('/api/public/submit', (req, res) => {
   const log_date = req.body.log_date;
   if (!log_date) return res.status(400).json({ error: 'log_date required' });
 
-  // pull driver defaults
   const drv = getDriver.get(driverId);
   const rpm = drv?.rpm_default ?? 0.46;
   const det_rate = drv?.hourly_default ?? 0;
@@ -414,7 +428,7 @@ app.post('/api/public/submit', (req, res) => {
   res.json({ ok: true, id: info.lastInsertRowid, action: 'created' });
 });
 
-// ---- health ----
+/* ---------- Health ---------- */
 app.get('/api/ping', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 app.listen(PORT, () => {
