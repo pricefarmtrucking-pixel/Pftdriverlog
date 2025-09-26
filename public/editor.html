@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Edit Log</title>
+</head>
+<body>
+  <h1>Edit Log</h1>
+  <form id="editForm">
+    <label>Date: <input type="date" name="log_date"></label><br>
+    <label>Truck: <input type="text" name="truck"></label><br>
+    <label>Miles: <input type="number" step="0.1" name="miles"></label><br>
+    <label>Stop Value: <input type="number" step="0.1" name="value"></label><br>
+    <label>Detention (minutes): <input type="number" name="detention"></label><br>
+    <label>Start Time: <input type="time" name="start_time"></label><br>
+    <label>End Time: <input type="time" name="end_time"></label><br>
+    <button type="submit">Save</button>
+  </form>
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const id = urlParams.get('id');
+    const token = urlParams.get('token');
+    async function loadLog() {
+      const res = await fetch(`/api/admin/logs/${id}?token=${token}`);
+      const log = await res.json();
+      for (const k in log) {
+        if (document.querySelector(`[name=${k}]`)) {
+          document.querySelector(`[name=${k}]`).value = log[k] || '';
+        }
+      }
+    }
+    loadLog();
+    document.getElementById('editForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(e.target).entries());
+      await fetch(`/api/admin/logs/${id}?token=${token}`, {
+        method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(data)
+      });
+      alert('Saved');
+    });
+  </script>
+</body>
+</html>
