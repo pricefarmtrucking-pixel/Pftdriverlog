@@ -1,0 +1,14 @@
+{
+  "name": "driver-daily-log",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^9.6.0",
+    "express": "^4.19.2",
+    "googleapis": "^144.0.0"
+  }
+}
