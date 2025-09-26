@@ -1,16 +1,37 @@
 // db.js
 import Database from 'better-sqlite3';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
-// Use persistent disk on Render if available
-const DB_PATH = process.env.DB_PATH || '/data/pft_driverlog.sqlite';
+// Pick a DB path (prefer persistent disk at /data)
+let DB_PATH = process.env.DB_PATH || '/data/pft_driverlog.sqlite';
 
-// Export the db instance
-export const db = new Database(DB_PATH);
+// Ensure the directory exists; if not, fall back to /tmp
+try {
+  const dir = path.dirname(DB_PATH);
+  fs.mkdirSync(dir, { recursive: true });
+} catch (e) {
+  console.warn('[DB] Failed to create dir for', DB_PATH, e?.message);
+}
+
+let dbInstance;
+try {
+  dbInstance = new Database(DB_PATH);
+  console.log('[DB] Using', DB_PATH);
+} catch (e) {
+  console.warn('[DB] Open failed for', DB_PATH, '-> falling back to /tmp:', e?.message);
+  DB_PATH = '/tmp/pft_driverlog.sqlite';
+  const dir = path.dirname(DB_PATH);
+  try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  dbInstance = new Database(DB_PATH);
+  console.log('[DB] Using fallback', DB_PATH);
+}
+
+export const db = dbInstance;
 db.pragma('journal_mode = WAL');
 
 // --- schema ---
@@ -44,14 +65,13 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 `);
 
-// ---- prepared statements / exports ----
+// prepared statements
 export const insertDriver = db.prepare('INSERT INTO drivers (name) VALUES (?)');
 export const insertTruck  = db.prepare('INSERT OR IGNORE INTO trucks (unit) VALUES (?)');
 export const listDrivers  = db.prepare('SELECT * FROM drivers ORDER BY id');
 export const listTrucks   = db.prepare('SELECT * FROM trucks ORDER BY unit');
 export const getDriver    = db.prepare('SELECT * FROM drivers WHERE id = ?');
 
-// ✅ MISSING BEFORE: allow admin to set default rates per driver
 export const setDriverDefaults = db.prepare(`
   UPDATE drivers
   SET rpm_default = @rpm_default, hourly_default = @hourly_default
