@@ -9,7 +9,7 @@ const __dirname  = path.dirname(__filename);
 // Use persistent disk on Render if available
 const DB_PATH = process.env.DB_PATH || '/data/pft_driverlog.sqlite';
 
-// IMPORTANT: export the db instance
+// Export the db instance
 export const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 
@@ -44,11 +44,19 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 `);
 
+// ---- prepared statements / exports ----
 export const insertDriver = db.prepare('INSERT INTO drivers (name) VALUES (?)');
 export const insertTruck  = db.prepare('INSERT OR IGNORE INTO trucks (unit) VALUES (?)');
 export const listDrivers  = db.prepare('SELECT * FROM drivers ORDER BY id');
 export const listTrucks   = db.prepare('SELECT * FROM trucks ORDER BY unit');
 export const getDriver    = db.prepare('SELECT * FROM drivers WHERE id = ?');
+
+// ✅ MISSING BEFORE: allow admin to set default rates per driver
+export const setDriverDefaults = db.prepare(`
+  UPDATE drivers
+  SET rpm_default = @rpm_default, hourly_default = @hourly_default
+  WHERE id = @id
+`);
 
 export const addLog = db.prepare(`
 INSERT INTO logs (log_date, driver_id, truck_id, miles, value, rpm, per_value,
@@ -126,4 +134,4 @@ export function setLogPeriod(ids, start, end) {
   tx(ids);
 }
 
-export default db; // optional (compatibility)
+export default db;
