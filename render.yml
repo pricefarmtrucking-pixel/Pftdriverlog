@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: driver-daily-log
+    env: node
+    region: oregon
+    plan: starter
+    buildCommand: "npm install"
+    startCommand: "node index.js"
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TZ
+        value: America/Chicago
+      - key: DB_PATH
+        value: /data/driverlog.sqlite
+      - key: PORT
+        value: 3000
+      # ↓ set these in Render after deploy (Edit → Environment)
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: DRIVER_TOKENS_JSON
+        sync: false
+      - key: PAY_WEEK_START
+        value: MON
+      - key: PAY_CUTOFF_HHMM
+        value: "1700"
+      - key: GOOGLE_SERVICE_EMAIL
+        sync: false
+      - key: GOOGLE_SERVICE_PRIVATE_KEY
+        sync: false
+      - key: GOOGLE_DRIVE_FOLDER_ID
+        sync: false
+    disk:
+      name: driverlog-data
+      mountPath: /data
+      sizeGB: 1

@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import cors from 'cors';
 import {
   insertDriver, insertTruck, listDrivers, listTrucks, getDriver,
   setDriverDefaults,
@@ -17,6 +18,20 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+// ---- CORS for GitHub Pages driver landing ----
+const ALLOWED_ORIGINS = [
+  'https://pricefarmtrucking-pixel.github.io',
+  'https://pricefarmtrucking.github.io'
+];
+app.use(cors({
+  origin: function (origin, cb) {
+    // allow same-origin or no origin (like curl)
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    return cb(null, false);
+  }
+}));
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---- Simple auth via header token ----
@@ -292,6 +307,102 @@ app.post('/api/period/close', async (req, res) => {
   }
 
   res.json({ ok:true, start, end, saved: fname, driveFileId });
+});
+
+
+// ---- Public submission endpoint (for GitHub Pages form) ----
+// Accepts: { driver_token, log_date, truck_unit, miles, value, detention_minutes, notes, dup_action? }
+// Uses driver defaults for rpm and hourly; ignores client-supplied rates for safety.
+function driverIdFromToken(tok){
+  let map = {};
+  try { map = JSON.parse(process.env.DRIVER_TOKENS_JSON || '{}'); } catch {}
+  for (const [driverId, t] of Object.entries(map)) {
+    if (tok === t) return Number(driverId);
+  }
+  return null;
+}
+
+// find-or-create truck by unit
+import db from './db.js';
+function getOrCreateTruckId(unit){
+  if (!unit || !unit.trim()) return null;
+  const row = db.prepare('SELECT id FROM trucks WHERE unit = ?').get(unit.trim());
+  if (row && row.id) return row.id;
+  insertTruck.run(unit.trim());
+  const row2 = db.prepare('SELECT id FROM trucks WHERE unit = ?').get(unit.trim());
+  return row2 ? row2.id : null;
+}
+
+app.post('/api/public/submit', (req, res) => {
+  const token = req.body.driver_token || req.headers['x-auth']; // allow header or body
+  const driverId = driverIdFromToken(token);
+  if (!driverId) return res.status(401).json({ error: 'invalid driver token' });
+
+  const truck_unit = String(req.body.truck_unit || '').trim();
+  const truckId = getOrCreateTruckId(truck_unit);
+  if (!truckId) return res.status(400).json({ error: 'truck_unit required' });
+
+  const log_date = req.body.log_date;
+  if (!log_date) return res.status(400).json({ error: 'log_date required' });
+
+  // pull driver defaults
+  const drv = getDriver.get(driverId);
+  const rpm = drv?.rpm_default ?? 0.46;
+  const det_rate = drv?.hourly_default ?? 0;
+  const per_value = 25;
+
+  const { start, end } = currentPayPeriod();
+  const data = {
+    log_date,
+    driver_id: driverId,
+    truck_id: truckId,
+    miles: Number(req.body.miles || 0),
+    value: Number(req.body.value || 0),
+    rpm: Number(rpm),
+    per_value: Number(per_value),
+    detention_minutes: Number(req.body.detention_minutes || 0),
+    detention_rate: Number(det_rate),
+    notes: req.body.notes || '',
+    period_start: start,
+    period_end: end
+  };
+
+  const existing = db.prepare('SELECT * FROM logs WHERE log_date = ? AND truck_id = ? AND driver_id = ? ORDER BY id DESC LIMIT 1')
+                    .get(data.log_date, data.truck_id, data.driver_id);
+  const dupAction = (req.body.dup_action || '').toLowerCase();
+
+  if (existing && !dupAction) {
+    return res.status(409).json({
+      duplicate: true,
+      existing: { id: existing.id, miles: existing.miles, value: existing.value, detention_minutes: existing.detention_minutes }
+    });
+  }
+  if (existing && dupAction === 'replace') {
+    updateLog.run({ ...data, id: existing.id });
+    return res.json({ ok: true, id: existing.id, action: 'replaced' });
+  }
+  if (existing && dupAction === 'append') {
+    db.prepare(`UPDATE logs SET
+      miles = miles + @miles,
+      value = value + @value,
+      detention_minutes = detention_minutes + @detention_minutes,
+      notes = CASE
+        WHEN @notes IS NULL OR TRIM(@notes) = '' THEN notes
+        WHEN notes IS NULL OR TRIM(notes) = '' THEN @notes
+        ELSE notes || char(10) || @notes
+      END
+    WHERE id=@id`).run({
+      id: existing.id,
+      miles: data.miles,
+      value: data.value,
+      detention_minutes: data.detention_minutes,
+      notes: data.notes
+    });
+    return res.json({ ok: true, id: existing.id, action: 'appended' });
+  }
+
+  const info = addLog.run(data);
+  res.json({ ok: true, id: info.lastInsertRowid, action: 'created' });
 });
 
 // ---- health ----
