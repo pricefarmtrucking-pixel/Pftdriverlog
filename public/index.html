@@ -1,110 +1,33 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Driver Daily Log</title>
-  <style>
-    :root { --bg:#0b1016; --panel:#131b24; --muted:#9fb0c2; --text:#e7eef7; --accent:#48c78e; --danger:#ff6b6b; }
-    * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    header { padding:16px; background:var(--panel); display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-    main { padding:16px; }
-    input, select, button {
-      background:#0d1420; color:var(--text); border:1px solid #213044; border-radius:6px; padding:8px; outline:none;
-    }
-    button { background:var(--accent); border:none; color:#062a1a; font-weight:600; cursor:pointer; }
-    table { width:100%; border-collapse: collapse; margin-top:12px; }
-    th, td { border-bottom:1px solid #223044; padding:8px; text-align:left; }
-    th { cursor:pointer; user-select:none; }
-    .row { display:flex; gap:8px; flex-wrap:wrap; }
-    .card { background:var(--panel); padding:12px; border-radius:10px; margin-bottom:12px; }
-    .right { margin-left:auto; }
-    .muted { color:var(--muted); }
-    .pill { display:inline-block; padding:4px 8px; border-radius:999px; background:#0e1a2a; border:1px solid #203349; font-size:12px; }
-  </style>
+  <meta charset="utf-8">
+  <title>PFT Driver Log</title>
 </head>
 <body>
-  <header>
-    <strong>Driver Daily Log</strong>
-    <span class="muted">Filter by week or pay period →</span>
-    <label>From <input type="date" id="from"></label>
-    <label>To <input type="date" id="to"></label>
-    <label>Driver <select id="f_driver"><option value="">All</option></select></label>
-    <label>Truck <select id="f_truck"><option value="">All</option></select></label>
-    <button id="btnWeek">This Week</button>
-    <button id="btnPayPeriod">Pay this Period</button>
-    <button id="btnFetch">Apply</button>
-    <a id="csvLink" class="right" href="#" target="_blank"><button>Export CSV</button></a>
-  </header>
-
-  <main>
-    <div class="card">
-      <div class="row">
-        <label>Date <input type="date" id="log_date"></label>
-        <label>Driver <select id="driver"></select></label>
-        <label>Truck <select id="truck"></select></label>
-        <label>Miles <input type="number" id="miles" step="0.1" placeholder="0"></label>
-        <label>Value <input type="number" id="value" step="0.01" placeholder="0"></label>
-        <label>RPM <input type="number" id="rpm" step="0.01" placeholder="(driver default)"></label>
-        <label>Per Value <input type="number" id="per_value" step="0.01" value="25"></label>
-        <label>Det. Min <input type="number" id="det_min" step="1" value="0"></label>
-        <label>Det. $/hr <input type="number" id="det_rate" step="0.01" placeholder="(driver default)"></label>
-        <label style="flex:1">Notes <input type="text" id="notes" placeholder="optional"></label>
-        <button id="btnAdd">Add Log</button>
-      </div>
-      <div class="row" style="margin-top:8px">
-        <label>Add Driver <input type="text" id="newDriver" placeholder="e.g. John Doe"></label>
-        <button id="btnAddDriver">Save Driver</button>
-        <label>Add Truck <input type="text" id="newTruck" placeholder="e.g. T660"></label>
-        <button id="btnAddTruck">Save Truck</button>
-        <span class="muted">Tip: leave RPM/Det $/hr blank to auto-use the driver defaults.</span>
-      </div>
-    </div>
-
-    <div class="card" id="approvalsCard" style="display:none">
-      <strong>Approvals Queue</strong>
-      <div id="approvalsList" class="muted" style="margin-top:8px">Loading…</div>
-    </div>
-
-    <div class="card">
-      <strong>Logs</strong>
-      <table id="tbl">
-        <thead>
-          <tr>
-            <th data-k="log_date">Date</th>
-            <th data-k="driver_name">Driver</th>
-            <th data-k="truck_unit">Truck</th>
-            <th data-k="miles">Miles</th>
-            <th data-k="value">Value</th>
-            <th data-k="rpm">RPM</th>
-            <th data-k="per_value">Per Value</th>
-            <th data-k="detention_minutes">Det (min)</th>
-            <th data-k="detention_rate">Det $/hr</th>
-            <th data-k="pay">Pay</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-
-    <div class="card">
-      <strong>Payroll Totals (by Driver)</strong>
-      <table id="tblPay">
-        <thead>
-          <tr>
-            <th>Driver</th>
-            <th>Total Miles</th>
-            <th>Total Value</th>
-            <th>Total Pay</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </main>
-
-  <script src="app.js"></script>
+  <h1>Driver Daily Log</h1>
+  <form id="logForm">
+    <input type="hidden" id="driver_token" name="driver_token">
+    <label>Date: <input type="date" name="log_date" required></label><br>
+    <label>Truck: <input type="text" name="truck" required></label><br>
+    <label>Miles: <input type="number" name="miles" required></label><br>
+    <label>Value: <input type="number" name="value" required></label><br>
+    <button type="submit">Submit</button>
+  </form>
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    document.getElementById('driver_token').value = urlParams.get('t') || '';
+    document.getElementById('logForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = Object.fromEntries(new FormData(e.target));
+      const res = await fetch('/api/public/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData)
+      });
+      const data = await res.json();
+      alert(JSON.stringify(data));
+    });
+  </script>
 </body>
 </html>

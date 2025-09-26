@@ -1,119 +1,26 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Driver Log Admin</title>
-<style>
-  body{font:14px/1.4 system-ui,Segoe UI,Roboto,Helvetica,Arial;margin:0;padding:20px;background:#0b1016;color:#e7eef7}
-  h1{margin:0 0 12px}
-  .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
-  input,select,button{padding:8px;border-radius:8px;border:1px solid #2a394a;background:#0f1620;color:#e7eef7}
-  table{width:100%;border-collapse:collapse;margin-top:10px}
-  th,td{border-top:1px solid #233142;padding:6px;text-align:left}
-  th{font-size:12px;color:#b9c7d6;text-transform:uppercase;letter-spacing:.05em}
-  .right{text-align:right}
-  .ok{color:#4cc38a}
-  .warn{color:#ffb454}
-  .err{color:#ff6b6b}
-</style>
+  <meta charset="utf-8">
+  <title>Admin - Driver Logs</title>
 </head>
 <body>
-<h1>Driver Log Admin</h1>
-
-<div class="row">
-  <button id="ping">Ping</button>
-  <button id="loadDrivers">Drivers</button>
-  <button id="loadTrucks">Trucks</button>
-  <button id="loadPending">Pending Approvals</button>
-</div>
-
-<div class="row">
-  <label>From <input type="date" id="from"></label>
-  <label>To <input type="date" id="to"></label>
-  <label>Driver ID <input type="number" id="driver_id" min="1"></label>
-  <label>Truck ID <input type="number" id="truck_id" min="1"></label>
-  <button id="loadLogs">Filter Logs</button>
-  <button id="downloadCsv">Download CSV</button>
-</div>
-
-<div class="row">
-  <button id="periodCurrent">Show Current Period</button>
-  <button id="periodAssign">Assign Current Period to Selected IDs</button>
-  <button id="periodClose">Close Period (mark approved + export)</button>
-</div>
-
-<pre id="out"></pre>
-
-<script>
-const API = location.origin; // same origin (Render)
-const ADMIN_TOKEN = (new URLSearchParams(location.search).get('t')) || (localStorage.getItem('adminTok')||prompt('Admin token?'));
-if (ADMIN_TOKEN) localStorage.setItem('adminTok', ADMIN_TOKEN);
-
-function headers(){
-  return {'Content-Type':'application/json','X-Auth':ADMIN_TOKEN||''};
-}
-function print(obj){ document.getElementById('out').textContent = typeof obj==='string'?obj:JSON.stringify(obj,null,2); }
-
-document.getElementById('ping').onclick = async()=>{
-  const r = await fetch(API+'/api/ping'); print(await r.json());
-};
-document.getElementById('loadDrivers').onclick = async()=>{
-  const r = await fetch(API+'/api/drivers'); print(await r.json());
-};
-document.getElementById('loadTrucks').onclick = async()=>{
-  const r = await fetch(API+'/api/trucks'); print(await r.json());
-};
-document.getElementById('loadPending').onclick = async()=>{
-  const r = await fetch(API+'/api/approvals/pending', { headers: headers() });
-  print(await r.json());
-};
-document.getElementById('loadLogs').onclick = async()=>{
-  const p = new URLSearchParams();
-  const from = document.getElementById('from').value;
-  const to = document.getElementById('to').value;
-  const driver_id = document.getElementById('driver_id').value;
-  const truck_id = document.getElementById('truck_id').value;
-  if (from) p.set('from', from);
-  if (to) p.set('to', to);
-  if (driver_id) p.set('driver_id', driver_id);
-  if (truck_id) p.set('truck_id', truck_id);
-  const r = await fetch(API+'/api/logs?'+p.toString(), { headers: headers() });
-  print(await r.json());
-};
-document.getElementById('downloadCsv').onclick = async()=>{
-  const p = new URLSearchParams();
-  const from = document.getElementById('from').value;
-  const to = document.getElementById('to').value;
-  const driver_id = document.getElementById('driver_id').value;
-  const truck_id = document.getElementById('truck_id').value;
-  if (from) p.set('from', from);
-  if (to) p.set('to', to);
-  if (driver_id) p.set('driver_id', driver_id);
-  if (truck_id) p.set('truck_id', truck_id);
-  window.location = API+'/api/logs.csv?'+p.toString();
-};
-document.getElementById('periodCurrent').onclick = async()=>{
-  const r = await fetch(API+'/api/period/current'); print(await r.json());
-};
-document.getElementById('periodAssign').onclick = async()=>{
-  const ids = prompt('Enter comma-separated log IDs to assign to current period (e.g. 12,13,14):');
-  if (!ids) return;
-  const list = ids.split(',').map(s=>Number(s.trim())).filter(Boolean);
-  const r = await fetch(API+'/api/period/assign', {
-    method:'POST', headers: headers(), body: JSON.stringify({ ids: list })
-  });
-  print(await r.json());
-};
-document.getElementById('periodClose').onclick = async()=>{
-  const start = prompt('Period START (YYYY-MM-DD):');
-  const end = prompt('Period END (YYYY-MM-DD):');
-  if (!start || !end) return;
-  const r = await fetch(API+'/api/period/close', {
-    method:'POST', headers: headers(), body: JSON.stringify({ start, end })
-  });
-  print(await r.json());
-};
-</script>
+  <h1>Admin Logs</h1>
+  <input type="text" id="token" placeholder="Enter admin token">
+  <button onclick="loadLogs()">Load Logs</button>
+  <button onclick="loadPayroll()">Load Payroll</button>
+  <pre id="output"></pre>
+  <script>
+    async function loadLogs() {
+      const token = document.getElementById('token').value;
+      const res = await fetch('/api/admin/logs?token=' + token);
+      document.getElementById('output').textContent = JSON.stringify(await res.json(), null, 2);
+    }
+    async function loadPayroll() {
+      const token = document.getElementById('token').value;
+      const res = await fetch('/api/admin/payroll?token=' + token);
+      document.getElementById('output').textContent = JSON.stringify(await res.json(), null, 2);
+    }
+  </script>
 </body>
 </html>
