@@ -1,72 +1,84 @@
+// db.js
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
-const dataDir = process.env.DATA_DIR || '/var/data';
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
-const dbPath = path.join(dataDir, 'driverlogs.sqlite');
-const db = new Database(dbPath);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Use a project-local writable folder (avoid /data permission errors on Render)
+const DATA_DIR = path.join(__dirname, 'data');
+const DB_FILE  = path.join(DATA_DIR, 'driverlog.sqlite3');
 
 export function initDb() {
-  db.prepare(`CREATE TABLE IF NOT EXISTS logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    driver_token TEXT,
-    log_date TEXT,
-    truck TEXT,
-    miles REAL,
-    value REAL,
-    detention REAL DEFAULT 0,
-    start_time TEXT,
-    end_time TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    paid INTEGER DEFAULT 0
-  )`).run();
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+  const db = new Database(DB_FILE);
+  db.pragma('journal_mode = WAL');
+
+  // --- Schema ---
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS drivers (
+      id            INTEGER PRIMARY KEY,
+      name          TEXT NOT NULL,
+      rpm_default   REAL DEFAULT 0.46,
+      hourly_default REAL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS trucks (
+      id    INTEGER PRIMARY KEY,
+      unit  TEXT UNIQUE NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS logs (
+      id                INTEGER PRIMARY KEY,
+      log_date          TEXT NOT NULL,                -- YYYY-MM-DD
+      driver_id         INTEGER NOT NULL,
+      truck_id          INTEGER NOT NULL,
+      miles             REAL    DEFAULT 0,
+      value             REAL    DEFAULT 0,            -- “stop value hours”
+      rpm               REAL    DEFAULT 0.46,         -- stored to snapshot rate used
+      per_value         REAL    DEFAULT 25,           -- stored snapshot
+      detention_minutes INTEGER DEFAULT 0,
+      detention_rate    REAL    DEFAULT 0,            -- stored snapshot
+      notes             TEXT    DEFAULT '',
+      approved_at       TEXT    DEFAULT NULL,
+      paid_at           TEXT    DEFAULT NULL,
+      created_at        TEXT    DEFAULT (datetime('now')),
+      FOREIGN KEY(driver_id) REFERENCES drivers(id),
+      FOREIGN KEY(truck_id)  REFERENCES trucks(id)
+    );
+  `);
+
+  // Optional: ensure driver rows exist for the IDs referenced in DRIVER_TOKENS_JSON
+  try {
+    const map = JSON.parse(process.env.DRIVER_TOKENS_JSON || '{}');
+    const getDrv = db.prepare(`SELECT id FROM drivers WHERE id=?`);
+    const insDrv = db.prepare(`INSERT INTO drivers (id, name) VALUES (?, ?)`);
+    for (const key of Object.keys(map)) {
+      const id = Number(key);
+      if (!getDrv.get(id)) {
+        insDrv.run(id, `Driver #${id}`);
+      }
+    }
+  } catch { /* ignore */ }
+
+  db.close();
 }
 
-export function insertLog({ driver_token, log_date, truck, miles, value, detention, start_time, end_time }) {
-  const stmt = db.prepare(
-    'INSERT INTO logs (driver_token, log_date, truck, miles, value, detention, start_time, end_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  );
-  stmt.run(driver_token, log_date, truck, miles, value, detention, start_time, end_time);
+function open() {
+  const db = new Database(DB_FILE);
+  db.pragma('journal_mode = WAL');
+  return db;
 }
 
-export function getLogs(from, to) {
-  let sql = 'SELECT * FROM logs WHERE 1=1';
-  const params = [];
-  if (from) { sql += ' AND log_date >= ?'; params.push(from); }
-  if (to) { sql += ' AND log_date <= ?'; params.push(to); }
-  sql += ' ORDER BY log_date DESC';
-  return db.prepare(sql).all(...params);
-}
-
-export function getLogById(id) {
-  return db.prepare('SELECT * FROM logs WHERE id = ?').get(id);
-}
-
-export function updateLog(id, { log_date, truck, miles, value, detention, start_time, end_time }) {
-  db.prepare(`UPDATE logs SET
-    log_date=?, truck=?, miles=?, value=?, detention=?, start_time=?, end_time=?
-    WHERE id=?
-  `).run(log_date, truck, miles, value, detention, start_time, end_time, id);
-}
-
-export function markPaid(ids) {
-  const stmt = db.prepare('UPDATE logs SET paid=1 WHERE id=?');
-  ids.forEach(id => stmt.run(id));
-}
-
-export function getPayroll(from, to) {
-  let sql = `SELECT driver_token,
-    SUM(miles) as total_miles,
-    SUM(value) as total_value,
-    SUM(detention) as total_detention,
-    (SUM(miles) * 0.46 + SUM(value) * 25 + SUM(detention) * 25/60) as total_pay
-    FROM logs WHERE 1=1`;
-  const params = [];
-  if (from) { sql += ' AND log_date >= ?'; params.push(from); }
-  if (to) { sql += ' AND log_date <= ?'; params.push(to); }
-  sql += ' GROUP BY driver_token';
-  return db.prepare(sql).all(...params);
-}
+/* -------------------------------------------------
+   Utility: ensure/lookup truck id by unit
+-------------------------------------------------- */
+export function getOrCreateTruckId(unit) {
+  const u = String(unit || '').trim();
+  if (!u) return null;
+  const db = open();
+  try {
+    const get = db.prepare(`SELECT id
