@@ -16,22 +16,33 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-// ---- CORS for GitHub Pages driver landing ----
+/* =========================
+   CORS (must be before routes)
+   ========================= */
 const ALLOWED_ORIGINS = [
   'https://pricefarmtrucking-pixel.github.io',
   'https://pricefarmtrucking.github.io'
 ];
+
 app.use(cors({
-  origin: function (origin, cb) {
-    // allow same-origin or no origin (like curl)
+  origin(origin, cb) {
+    // allow same-origin or non-browser clients (curl/postman)
     if (!origin) return cb(null, true);
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     return cb(null, false);
-  }
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+  credentials: false,
+  maxAge: 86400
 }));
 
+// Ensure preflight OPTIONS returns immediately with CORS headers
+app.options('*', cors());
+
+/* Body parsers & static (after CORS) */
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---- Simple auth via header token ----
@@ -183,8 +194,7 @@ app.get('/api/logs', (req, res) => {
     rows = rows
       .filter(r => r.driver_id === user.driverId) // only own rows
       .map(r => ({
-        ...r,
-        // their own rates are visible; no other rows present
+        ...r
       }));
   }
   res.json(rows);
@@ -312,7 +322,6 @@ app.post('/api/period/close', async (req, res) => {
 
 // ---- Public submission endpoint (for GitHub Pages form) ----
 // Accepts: { driver_token, log_date, truck_unit, miles, value, detention_minutes, notes, dup_action? }
-// Uses driver defaults for rpm and hourly; ignores client-supplied rates for safety.
 function driverIdFromToken(tok){
   let map = {};
   try { map = JSON.parse(process.env.DRIVER_TOKENS_JSON || '{}'); } catch {}
