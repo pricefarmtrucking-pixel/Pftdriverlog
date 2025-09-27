@@ -1,1 +1,110 @@
-<!DOCTYPE html><html><body><h1>Admin Logs Page</h1></body></html>
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Admin – Driver Logs</title>
+<style>
+  body{font:14px/1.4 system-ui,Segoe UI,Roboto,Arial;margin:0;background:#0b1016;color:#e7eef7}
+  header{display:flex;gap:12px;align-items:center;padding:12px 16px;background:#111a24;border-bottom:1px solid #1e2a36}
+  input,button{padding:8px;border-radius:8px;border:1px solid #2a394a;background:#0f1620;color:#e7eef7}
+  button{background:#4cc38a;border:0;color:#0b1410;font-weight:700;cursor:pointer}
+  .wrap{padding:16px}
+  table{width:100%;border-collapse:collapse}
+  th,td{border-top:1px solid #233142;padding:8px;text-align:left}
+  th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#b9c7d6;position:sticky;top:0;background:#0b1016}
+  .right{text-align:right}
+  .muted{color:#8291a3}
+  .chk{width:24px}
+  a{color:#76d4ff}
+</style>
+</head>
+<body>
+<header>
+  <strong>Admin</strong>
+  <label>From <input type="date" id="from"></label>
+  <label>To <input type="date" id="to"></label>
+  <label>Token <input type="password" id="token" placeholder="ADMIN_TOKEN"></label>
+  <button id="load">Load</button>
+  <button id="markPaid">Mark Paid</button>
+</header>
+<div class="wrap">
+  <table id="grid">
+    <thead>
+      <tr>
+        <th class="chk"></th>
+        <th>ID</th>
+        <th>Date</th>
+        <th>Truck</th>
+        <th class="right">Miles</th>
+        <th class="right">Stop Value</th>
+        <th class="right">Detention (min)</th>
+        <th class="right">Detention Rate</th>
+        <th class="right">Detention $</th>
+        <th>Start</th>
+        <th>End</th>
+        <th class="right">Total Hrs</th>
+        <th>Paid</th>
+        <th>Notes</th>
+        <th>Edit</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const fmtHrs = m => (Number(m||0)/60).toFixed(2);
+
+async function load(){
+  const from = $('#from').value;
+  const to = $('#to').value;
+  const token = $('#token').value.trim();
+  if(!token){ alert('Enter admin token'); return; }
+  const qs = new URLSearchParams({ from, to, token });
+  const res = await fetch(`/api/admin/logs?`+qs.toString());
+  if(!res.ok){ alert('Load failed'); return; }
+  const rows = await res.json();
+  const tb = $('#grid tbody'); tb.innerHTML='';
+  for(const r of rows){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="checkbox" data-id="${r.id}"></td>
+      <td>${r.id}</td>
+      <td>${r.log_date||''}</td>
+      <td>${r.truck_unit||''}</td>
+      <td class="right">${Number(r.miles||0).toFixed(2)}</td>
+      <td class="right">${Number(r.stop_value||0).toFixed(2)}</td>
+      <td class="right">${Number(r.detention_minutes||0)}</td>
+      <td class="right">${Number(r.detention_rate||0).toFixed(2)}</td>
+      <td class="right">${Number(r.detention_value||0).toFixed(2)}</td>
+      <td>${r.start_time||''}</td>
+      <td>${r.end_time||''}</td>
+      <td class="right">${fmtHrs(r.total_minutes)}</td>
+      <td>${r.paid? '✓' : ''}</td>
+      <td>${(r.notes||'').replaceAll('<','&lt;')}</td>
+      <td><a href="/driver-edit.html?id=${r.id}&token=${encodeURIComponent(token)}" target="_blank">Edit</a></td>
+    `;
+    tb.appendChild(tr);
+  }
+}
+
+async function markPaid(){
+  const token = $('#token').value.trim();
+  const ids = [...document.querySelectorAll('tbody input[type="checkbox"]:checked')].map(c=>Number(c.dataset.id));
+  if(!ids.length){ alert('No rows selected'); return; }
+  const res = await fetch('/api/admin/mark-paid?token='+encodeURIComponent(token), {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ ids })
+  });
+  if(!res.ok){ alert('Mark paid failed'); return; }
+  load();
+}
+
+$('#load').addEventListener('click', load);
+$('#markPaid').addEventListener('click', markPaid);
+</script>
+</body>
+</html>
